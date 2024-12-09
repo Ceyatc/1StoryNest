@@ -1,77 +1,89 @@
+import os
+from dotenv import load_dotenv
 import openai
-import streamlit as st
+from flask import Flask, request, jsonify
 from googletrans import Translator
+from PIL import Image
+from io import BytesIO
+import base64
+import requests
 
-# OpenAI API-sleutel
-openai.api_key = "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"
+# Laad .env-variabelen
+load_dotenv()
 
-# Initialiseer Google Translate API
+# Haal API-sleutels op uit .env-bestand
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("OPENAI_API_KEY niet gevonden. Controleer of .env correct is ingesteld.")
+
+openai.api_key = openai_api_key
+
+# Flask-app configureren
+app = Flask(__name__)
+
 translator = Translator()
 
-# Functie om verhalen te genereren met OpenAI GPT-4
-def generate_story(child_name, favorite_animal, theme, length="short"):
-    prompt = (
-        f"Write a {length} children's story about {child_name}, who loves {favorite_animal}, "
-        f"with a theme of {theme}. The story should have a clear beginning, middle, and a happy ending."
-    )
+# Functie om een verhaal te genereren
+def generate_story(prompt, max_length=300):
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a creative story generator for children."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1500 if length == "long" else 500,
-            temperature=0.8
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=max_length,
+            temperature=0.7,
+            top_p=0.9
         )
-        story = response["choices"][0]["message"]["content"].strip()
-        # Controleer of het verhaal goed eindigt
-        if story[-1] not in ".!?":
-            story += " And they all lived happily ever after."
-        return story
+        return response.choices[0].text.strip()
     except Exception as e:
-        return f"Error generating story: {e}"
+        return f"Fout bij genereren verhaal: {e}"
 
-# Functie om een illustratie te genereren met OpenAI DALL·E
+# Functie om een illustratie te genereren
 def generate_illustration(prompt):
     try:
-        response = openai.Image.create(
+        dalle_response = openai.Image.create(
             prompt=prompt,
             n=1,
-            size="512x512"
+            size="1024x1024"
         )
-        return response['data'][0]['url']
+        image_url = dalle_response['data'][0]['url']
+        return image_url
     except Exception as e:
-        return f"Error generating illustration: {e}"
+        return f"Fout bij genereren illustratie: {e}"
 
-# Streamlit UI
-st.title("StoryNest: Personalized Stories for Children")
-st.sidebar.header("Settings")
-
-# Gebruikersinvoer
-child_name = st.sidebar.text_input("Child's Name", "Emma")
-favorite_animal = st.sidebar.text_input("Favorite Animal", "Rabbit")
-theme = st.sidebar.text_input("Story Theme", "Winter Adventure")
-length = st.sidebar.selectbox("Story Length", ["short", "long"])
-language = st.sidebar.selectbox("Language", ["en", "fr", "es", "de", "nl"])
-
-# Knop om verhaal te genereren
-if st.sidebar.button("Generate Story"):
-    st.write("### Generated Story")
-    story = generate_story(child_name, favorite_animal, theme, length)
-
-    # Verhaal vertalen
+# Route voor verhaal genereren
+@app.route("/generate_story", methods=["POST"])
+def generate_story_endpoint():
+    data = request.json
+    if not data or "child_name" not in data or "favorite_animal" not in data or "theme" not in data:
+        return jsonify({"error": "Ontbrekende gegevens. Vereist: child_name, favorite_animal, theme"}), 400
+    
+    child_name = data["child_name"]
+    favorite_animal = data["favorite_animal"]
+    theme = data["theme"]
+    language = data.get("language", "en")  # Standaardtaal is Engels
+    
+    # Genereer het verhaal
+    story_prompt = f"Write a children's story about {child_name}, who loves {favorite_animal}, with a theme of {theme}."
+    story = generate_story(story_prompt)
+    
+    # Vertaal het verhaal indien nodig
     if language != "en":
-        story = translator.translate(story, src="en", dest=language).text
-
-    st.write(story)
-
-    # Illustratie genereren
-    st.write("### Generated Illustration")
-    illustration_prompt = f"A magical and child-friendly scene of {child_name} and a {favorite_animal} in a {theme} setting."
-    illustration_url = generate_illustration(illustration_prompt)
-
-    if "Error" not in illustration_url:
-        st.image(illustration_url, caption="Generated Illustration")
+        try:
+            translated_story = translator.translate(story, src="en", dest=language).text
+        except Exception as e:
+            return jsonify({"error": f"Fout bij vertalen: {e}"}), 500
     else:
-        st.write("Failed to generate illustration.")
+        translated_story = story
+
+    # Genereer illustratie
+    illustration_prompt = f"A high-quality children's book illustration featuring {favorite_animal} in a {theme} setting."
+    illustration_url = generate_illustration(illustration_prompt)
+    
+    if "Fout" in illustration_url:
+        return jsonify({"error": illustration_url}), 500
+
+    return jsonify({"story": translated_story, "illustration_url": illustration_url})
+
+# Start de Flask-server
+if __name__ == "__main__":
+    app.run(debug=True)
