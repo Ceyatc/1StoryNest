@@ -1,6 +1,8 @@
 import toml
 import openai
-from flask import Flask, request, jsonify
+import flask
+print("Flask geïnstalleerd:", flask.__version__)
+
 
 # Laad de configuratie vanuit config.toml
 config = toml.load("config.toml")
